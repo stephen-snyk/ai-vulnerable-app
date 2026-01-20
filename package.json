@@ -1,9 +1,9 @@
-// Copy the contents of this code block and save it to a file named "package.json" in your project directory
 {
     "name": "vulnerable-app",
     "version": "1.0.0",
     "dependencies": {
         "express": "^4.17.1",
-        "sqlite3": "^5.0.2"
+        "sqlite3": "^5.0.2",
+        "multer": "^1.4.5-lts.1"
     }
 }
