@@ -1,0 +1,5 @@
+This is a sample document file.
+
+It contains some basic text content that students can view through the file viewer.
+
+This file is intended to be accessible through the application.

@@ -1,0 +1,29 @@
+<!-- Copy the contents of this code block and save it to a file named "index.html" in a directory named "public" within your project directory -->
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Vulnerable App</title>
+</head>
+
+<body>
+    <h1>Vulnerable App</h1>
+    <form action="/create" method="post">
+        <label for="name">Name:</label>
+        <input type="text" id="name" name="name"><br><br>
+        <label for="email">Email:</label>
+        <input type="email" id="email" name="email"><br><br>
+        <input type="submit" value="Create User">
+    </form>
+    <form action="/search" method="get">
+        <label for="q">Search:</label>
+        <input type="text" id="q" name="q"><br><br>
+        <input type="submit" value="Search Users">
+    </form>
+    
+    <hr>
+    <h2>Security Demonstrations</h2>
+    <p><a href="/xsrf">🚨 XSRF/CSRF Vulnerability Demo</a></p>
+</body>
+
+</html>

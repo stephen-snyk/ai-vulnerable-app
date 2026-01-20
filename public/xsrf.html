@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>XSRF/CSRF Vulnerability Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .demo-section {
+            border: 1px solid #ccc;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .vulnerable {
+            background-color: #ffe6e6;
+            border-color: #ff9999;
+        }
+        .attack {
+            background-color: #fff3cd;
+            border-color: #ffc107;
+        }
+        form {
+            margin: 10px 0;
+        }
+        input, select {
+            margin: 5px;
+            padding: 5px;
+        }
+        .warning {
+            color: #d9534f;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚨 XSRF/CSRF Vulnerability Demonstration</h1>
+    
+    <div class="demo-section">
+        <h2>About This Demo</h2>
+        <p>This page demonstrates a <strong>Cross-Site Request Forgery (XSRF/CSRF)</strong> vulnerability. 
+        CSRF attacks trick users into performing unwanted actions on a web application where they're authenticated.</p>
+        
+        <p><strong>Demo Accounts:</strong></p>
+        <ul>
+            <li>alice: $1000</li>
+            <li>bob: $500</li>
+        </ul>
+        
+        <p><a href="/balances" target="_blank">View Current Balances</a></p>
+    </div>
+
+    <div class="demo-section vulnerable">
+        <h2>🔓 Vulnerable Money Transfer Form</h2>
+        <p class="warning">⚠️ This form has NO CSRF protection!</p>
+        
+        <form action="/transfer" method="POST">
+            <label for="from">Transfer From:</label>
+            <select name="from" id="from" required>
+                <option value="alice">alice</option>
+                <option value="bob">bob</option>
+            </select><br><br>
+            
+            <label for="to">Transfer To:</label>
+            <select name="to" id="to" required>
+                <option value="alice">alice</option>
+                <option value="bob">bob</option>
+            </select><br><br>
+            
+            <label for="amount">Amount: $</label>
+            <input type="number" name="amount" id="amount" min="1" required><br><br>
+            
+            <input type="submit" value="Transfer Money">
+        </form>
+    </div>
+
+    <div class="demo-section attack">
+        <h2>🎯 CSRF Attack Simulation</h2>
+        <p>The following demonstrates how an attacker could exploit this vulnerability:</p>
+        
+        <h3>Attack Scenario 1: Hidden Form</h3>
+        <p>An attacker could embed this hidden form on their malicious website:</p>
+        <pre>&lt;form action="http://localhost:3000/transfer" method="POST" style="display:none;"&gt;
+    &lt;input name="from" value="alice"&gt;
+    &lt;input name="to" value="bob"&gt;
+    &lt;input name="amount" value="100"&gt;
+&lt;/form&gt;
+&lt;script&gt;document.forms[0].submit();&lt;/script&gt;</pre>
+        
+        <h3>Attack Scenario 2: Image Tag Attack</h3>
+        <p>For GET requests, attackers could use:</p>
+        <pre>&lt;img src="http://localhost:3000/transfer?from=alice&to=bob&amount=50" style="display:none;"&gt;</pre>
+        
+        <h3>Try the Attack</h3>
+        <p>Click this button to simulate a CSRF attack (transfers $50 from alice to bob):</p>
+        <form action="/transfer" method="POST" style="display:none;" id="attackForm">
+            <input name="from" value="alice">
+            <input name="to" value="bob">
+            <input name="amount" value="50">
+        </form>
+        <button onclick="document.getElementById('attackForm').submit();">🚨 Execute CSRF Attack</button>
+    </div>
+
+    <div class="demo-section">
+        <h2>🛡️ How to Prevent CSRF Attacks</h2>
+        <ul>
+            <li><strong>CSRF Tokens:</strong> Include unique, unpredictable tokens in forms</li>
+            <li><strong>SameSite Cookies:</strong> Set cookies with SameSite=Strict or Lax</li>
+            <li><strong>Origin/Referer Headers:</strong> Validate request origin</li>
+            <li><strong>Double Submit Cookies:</strong> Send token in both cookie and form</li>
+            <li><strong>Custom Headers:</strong> Require custom headers for state-changing requests</li>
+        </ul>
+    </div>
+
+    <div class="demo-section">
+        <p><a href="/">← Back to Main App</a> | <a href="/balances">View Balances</a></p>
+    </div>
+</body>
+</html>

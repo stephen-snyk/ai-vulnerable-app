@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Compare: STUN (WebRTC) vs HTTPS echo</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; padding: 20px; max-width: 820px; }
+    pre { background:#f6f7fb; padding:12px; border-radius:8px; }
+    .ok { color: green; font-weight: 700; }
+    .warn { color: #b06; }
+    .block { margin-bottom: 1rem; }
+    button { padding: 0.6rem 1rem; border-radius: 8px; font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <h1>Compare: WebRTC STUN vs HTTPS IP echo</h1>
+  <p class="block">This page will (1) gather ICE candidates from a STUN server and (2) fetch a HTTPS IP-echo service, and show results side-by-side.</p>
+
+  <div class="block">
+    <button id="go">Run comparison</button>
+  </div>
+
+  <div class="block">
+    <h3>Results</h3>
+    <table>
+      <tr><th>Source</th><th>Value</th></tr>
+      <tr><td>HTTPS echo (api.ipify.org)</td><td id="https-ip">—</td></tr>
+      <tr><td>STUN reflexive (srflx) IPs</td><td id="stun-ips">—</td></tr>
+      <tr><td>All ICE candidates (host/srflx/relay)</td><td id="all-cands">—</td></tr>
+    </table>
+    <div style="margin-top:10px;">
+      <strong>Interpretation:</strong>
+      <div id="interpret">—</div>
+    </div>
+  </div>
+
+  <script>
+    const httpsEl = document.getElementById('https-ip');
+    const stunEl = document.getElementById('stun-ips');
+    const allEl = document.getElementById('all-cands');
+    const interp = document.getElementById('interpret');
+
+    function logInterp(txt){ interp.textContent = txt; }
+
+    async function fetchHttpsIp() {
+      try {
+        const r = await fetch('https://api.ipify.org?format=json', {cache: "no-store"});
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        return j.ip || null;
+      } catch (e) {
+        return { error: true, msg: String(e) };
+      }
+    }
+
+    function gatherStun() {
+      return new Promise(async (resolve, reject) => {
+        const ips = {srflx: new Set(), host: new Set(), other: new Set()};
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+        pc.createDataChannel('p');
+        pc.onicecandidate = ev => {
+          if (!ev.candidate) {
+            pc.close();
+            resolve(ips);
+            return;
+          }
+          const s = ev.candidate.candidate || '';
+          const m = s.match(/typ\s+(\w+)/);
+          const t = m ? m[1] : 'unknown';
+          const ipm = s.match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3}|[a-f0-9:]+(?:%[0-9a-z]+)?)/i);
+          const ip = ipm ? ipm[1] : null;
+          if (!ip) return;
+          if (t === 'srflx') ips.srflx.add(ip);
+          else if (t === 'host') ips.host.add(ip);
+          else ips.other.add(ip);
+        };
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }
+
+    document.getElementById('go').addEventListener('click', async () => {
+      httpsEl.textContent = '...fetching';
+      stunEl.textContent = '...gathering';
+      allEl.textContent = '...';
+      logInterp('Running both checks. STUN may be blocked or masked by browser/policy.');
+
+      const [h, s] = await Promise.allSettled([fetchHttpsIp(), gatherStun()]);
+
+      // HTTPS result
+      if (h.status === 'fulfilled') {
+        if (h.value && h.value.error) {
+          httpsEl.textContent = 'error: ' + h.value.msg;
+        } else {
+          httpsEl.textContent = h.value || 'no-ip';
+        }
+      } else {
+        httpsEl.textContent = 'error: ' + h.reason;
+      }
+
+      // STUN result
+      if (s.status === 'fulfilled') {
+        const ipsSrflx = Array.from(s.value.srflx);
+        const ipsHost = Array.from(s.value.host);
+        const ipsOther = Array.from(s.value.other);
+        stunEl.textContent = ipsSrflx.length ? ipsSrflx.join(', ') : '(no srflx candidates)';
+        allEl.textContent = 'srflx: ' + (ipsSrflx.join(', ')||'none') + ' | host: ' + (ipsHost.join(', ')||'none') + ' | other: ' + (ipsOther.join(', ')||'none');
+      } else {
+        stunEl.textContent = 'error: ' + s.reason;
+        allEl.textContent = 'error';
+      }
+
+      // Interpretation hints
+      const httpsIp = (h.status==='fulfilled' && !h.value?.error) ? h.value : null;
+      const srflxList = s.status==='fulfilled' ? Array.from(s.value.srflx) : [];
+      let message = '';
+      if (srflxList.length && httpsIp && srflxList.includes(httpsIp)) {
+        message = 'Both STUN and the HTTPS echo report the same public IP — browser/STUN is showing the same egress IP that HTTPS hits.';
+      } else if (srflxList.length && httpsIp && !srflxList.includes(httpsIp)) {
+        message = 'STUN reported ' + srflxList.join(', ') + ' while HTTPS reported ' + httpsIp + '. This suggests the HTTPS request and the STUN path were routed differently (e.g., proxy/split-tunnel) or the browser masked candidates.';
+      } else if (!srflxList.length && httpsIp) {
+        message = 'No STUN reflexive candidates were obtained but HTTPS returned ' + httpsIp + '. This likely means the browser or network policy is blocking/obscuring STUN/UDP, while HTTPS is visible.';
+      } else if (!httpsIp && srflxList.length) {
+        message = 'STUN returned ' + srflxList.join(', ') + ' but the HTTPS fetch failed. Network or CORS restrictions might have blocked the fetch.';
+      } else {
+        message = 'No public IPs found via STUN or HTTPS — likely heavy masking or corporate policy blocking these techniques.';
+      }
+      logInterp(message);
+    });
+  </script>
+</body>
+</html>

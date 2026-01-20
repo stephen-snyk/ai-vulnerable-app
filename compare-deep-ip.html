@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Deep Compare: WebRTC STUN vs HTTPS (Zscaler detective)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; max-width: 980px; margin: 20px auto; padding: 0 16px; color:#111; }
+    h1 { margin-bottom: 0.2rem; }
+    p.lead { color:#444; margin-top:0; margin-bottom:1rem; }
+    button { padding: 0.6rem 1rem; border-radius:8px; font-weight:600; }
+    section { background:#fbfbfd; border:1px solid #eee; padding:12px; border-radius:10px; margin-bottom:12px; }
+    table { width:100%; border-collapse: collapse; margin-top:8px; }
+    td, th { padding:6px 8px; border-bottom:1px solid #eee; text-align:left; vertical-align:top; }
+    code { background:#f4f4f6; padding:2px 6px; border-radius:4px; }
+    .ok { color:green; font-weight:700; }
+    .warn { color:#b06; font-weight:700; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; }
+    pre { background:#fff; border-radius:6px; padding:8px; overflow:auto; max-height:240px; }
+    .small { font-size:0.9rem; color:#555; }
+  </style>
+</head>
+<body>
+  <h1>Deep IP Compare (STUN vs HTTPS)</h1>
+  <p class="lead">Runs WebRTC STUN checks and multiple HTTPS IP-echo checks. Useful to see whether HTTPS and STUN are routed differently or if a proxy is injecting headers.</p>
+
+  <section>
+    <button id="run">Run full test</button>
+    <span class="small"> (run in the same browser/profile you used for DuckDuckGo)</span>
+  </section>
+
+  <section>
+    <h3>1) WebRTC / STUN results</h3>
+    <div id="webrtc-status" class="small">not run</div>
+    <table>
+      <tr><th>STUN server</th><th>srflx (public) candidates</th><th>host (local) candidates</th><th>raw candidates</th></tr>
+      <tr><td>stun:stun.l.google.com:19302</td><td id="g-srflx">—</td><td id="g-host">—</td><td id="g-raw">—</td></tr>
+      <tr><td>stun:stun.services.mozilla.com:3478</td><td id="m-srflx">—</td><td id="m-host">—</td><td id="m-raw">—</td></tr>
+      <tr><td>stun:stun1.l.google.com:19302</td><td id="g1-srflx">—</td><td id="g1-host">—</td><td id="g1-raw">—</td></tr>
+    </table>
+    <div id="webrtc-interpret" class="small" style="margin-top:8px;">—</div>
+  </section>
+
+  <section>
+    <h3>2) HTTPS IP echo checks + response headers</h3>
+    <p class="small">We attempt several common public echo endpoints. CORS may block some — that will be shown as an error. For successful requests we print the returned IP and any response headers visible to the browser.</p>
+    <table>
+      <tr><th>Endpoint</th><th>Result</th><th>Response headers (subset)</th></tr>
+      <tr><td><code>https://api.ipify.org?format=json</code></td><td id="ipify-res">—</td><td><pre id="ipify-headers">—</pre></td></tr>
+      <tr><td><code>https://ipinfo.io/json</code></td><td id="ipinfo-res">—</td><td><pre id="ipinfo-headers">—</pre></td></tr>
+      <tr><td><code>https://ifconfig.co/json</code></td><td id="ifc-res">—</td><td><pre id="ifc-headers">—</pre></td></tr>
+      <tr><td><code>https://duckduckgo.com/</code> (simple fetch)</td><td id="ddg-res">—</td><td><pre id="ddg-headers">—</pre></td></tr>
+    </table>
+    <div id="https-interpret" class="small" style="margin-top:8px;">—</div>
+  </section>
+
+  <section>
+    <h3>3) Heuristics & raw diagnostics</h3>
+    <p class="small">Candidate heuristics and notes about masked candidates (mDNS / e: tokens).</p>
+    <pre id="raw-diagnostics">—</pre>
+  </section>
+
+  <script>
+    // UTIL: tryFetch with CORS-safe handling
+    async function tryFetch(url, opts={}) {
+      try {
+        const r = await fetch(url, { cache: "no-store", redirect: "follow", ...opts });
+        // attempt to parse JSON or text
+        let bodyText = null;
+        try { bodyText = await r.text(); } catch(e) { bodyText = "__body_error__"; }
+        // gather subset of headers we care about
+        const hdrs = {};
+        const known = ['via','server','x-forwarded-for','x-zscaler-client','x-zscaler-proxy','x-zscaler-new','x-proxied-by','x-cache','x-cache-status','date','content-type'];
+        for (const k of known) {
+          const v = r.headers.get(k);
+          if (v) hdrs[k] = v;
+        }
+        // also include all headers accessible (may be limited)
+        for (const pair of r.headers.entries()) {
+          const name = pair[0];
+          if (!hdrs[name]) hdrs[name] = pair[1];
+        }
+        return { ok: r.ok, status: r.status, body: bodyText, headers: hdrs };
+      } catch (err) {
+        return { error: true, msg: String(err) };
+      }
+    }
+
+    // WebRTC STUN gather for a single STUN server
+    function gatherFromStun(stunUrl, timeout=6000) {
+      return new Promise(async (resolve, reject) => {
+        const result = { srflx: new Set(), host: new Set(), other: new Set(), raw: [] };
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: stunUrl }] });
+        try {
+          pc.createDataChannel('p'); // kick ICE
+        } catch(e) {}
+        pc.onicecandidate = ev => {
+          if (!ev.candidate) {
+            // done
+            try { pc.close(); } catch(e){}
+            resolve(result);
+            return;
+          }
+          const s = ev.candidate.candidate || '';
+          result.raw.push(s);
+          const typeMatch = s.match(/typ\s+(\w+)/);
+          const t = typeMatch ? typeMatch[1] : 'unknown';
+          const ipMatch = s.match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3}|[a-f0-9:]+(?:%[0-9a-z]+)?)/i);
+          const ip = ipMatch ? ipMatch[1] : null;
+          if (ip) {
+            if (t === 'srflx') result.srflx.add(ip);
+            else if (t === 'host') result.host.add(ip);
+            else result.other.add(ip);
+          } else {
+            // might be mDNS / e: token; check for tokens like e: or local names
+            if (s.includes('typ host') && /[a-z0-9\-]+\.local/i.test(s)) result.other.add('mDNS localname');
+            else if (/\be:[0-9]+\b/.test(s) || /a=[0-9]+/.test(s)) result.other.add('masked-token');
+          }
+        };
+
+        // create offer
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+        } catch (err) {
+          try { pc.close(); } catch(e){}
+          reject(err);
+        }
+        // safety timeout
+        setTimeout(() => {
+          try { pc.close(); } catch(e){}
+          resolve(result);
+        }, timeout);
+      });
+    }
+
+    function summarizeSet(s) { return Array.from(s).slice(0,10).join(', ') || '(none)'; }
+
+    document.getElementById('run').addEventListener('click', async () => {
+      // clear UI
+      document.getElementById('webrtc-status').textContent = 'running...';
+      ['g-srflx','g-host','g-raw','m-srflx','m-host','m-raw','g1-srflx','g1-host','g1-raw']
+        .forEach(id => document.getElementById(id).textContent = '...');
+
+      ['ipify-res','ipify-headers','ipinfo-res','ipinfo-headers','ifc-res','ifc-headers','ddg-res','ddg-headers']
+        .forEach(id => document.getElementById(id).textContent = id.includes('headers') ? '...' : '...');
+
+      document.getElementById('https-interpret').textContent = 'running ...';
+      document.getElementById('raw-diagnostics').textContent = 'gathering ...';
+
+      // 1) Gather STUN from multiple servers concurrently
+      const stunServers = [
+        { idPrefix: 'g', url: 'stun:stun.l.google.com:19302' },
+        { idPrefix: 'm', url: 'stun:stun.services.mozilla.com:3478' },
+        { idPrefix: 'g1', url: 'stun:stun1.l.google.com:19302' }
+      ];
+      const stunPromises = stunServers.map(s => gatherFromStun(s.url).then(res => ({ prefix: s.idPrefix, url: s.url, res })).catch(err => ({ prefix: s.idPrefix, url: s.url, err })));
+      // 2) Fire HTTPS fetches
+      const fetchPromises = {
+        ipify: tryFetch('https://api.ipify.org?format=json'),
+        ipinfo: tryFetch('https://ipinfo.io/json'),
+        ifc: tryFetch('https://ifconfig.co/json'),
+        ddg: tryFetch('https://duckduckgo.com/')
+      };
+
+      const [stunResults, ipifyR, ipinfoR, ifcR, ddgR] = await Promise.all([
+        Promise.all(stunPromises),
+        fetchPromises.ipify, fetchPromises.ipinfo, fetchPromises.ifc, fetchPromises.ddg
+      ]);
+
+      // render STUN results
+      let rawDiag = [];
+      for (const s of stunResults) {
+        if (s.err) {
+          document.getElementById(`${s.prefix}-srflx`).textContent = 'error';
+          document.getElementById(`${s.prefix}-host`).textContent = 'error';
+          document.getElementById(`${s.prefix}-raw`).textContent = String(s.err);
+          rawDiag.push(`${s.url} error: ${s.err}`);
+          continue;
+        }
+        const res = s.res;
+        document.getElementById(`${s.prefix}-srflx`).textContent = summarizeSet(res.srflx);
+        document.getElementById(`${s.prefix}-host`).textContent = summarizeSet(res.host);
+        document.getElementById(`${s.prefix}-raw`).textContent = (res.raw.length ? res.raw.slice(0,6).join('\n') : '(none)');
+        rawDiag.push(`${s.url} => srflx: ${summarizeSet(res.srflx)} | host: ${summarizeSet(res.host)} | other: ${summarizeSet(res.other)}`);
+      }
+
+      // render HTTPS results
+      function showFetchResult(prefix, r, resId, hdrId) {
+        const resEl = document.getElementById(resId);
+        const hdrEl = document.getElementById(hdrId);
+        if (r.error) {
+          resEl.textContent = `error: ${r.msg}`;
+          hdrEl.textContent = '(no headers)';
+          rawDiag.push(`${prefix} fetch error: ${r.msg}`);
+          return;
+        }
+        if (!r.ok) {
+          resEl.textContent = `status ${r.status} — body first 200 chars: ` + (r.body ? r.body.slice(0,200) : '(no-body)');
+          hdrEl.textContent = JSON.stringify(r.headers, null, 2);
+          rawDiag.push(`${prefix} status ${r.status}`);
+          return;
+        }
+        // parse common JSON body formats to extract ip if present
+        let ipVal = null;
+        try {
+          const maybe = JSON.parse(r.body);
+          if (maybe && (maybe.ip || maybe.address)) ipVal = maybe.ip || maybe.address;
+          else if (typeof maybe === 'string') ipVal = maybe;
+        } catch (e) {
+          // not JSON
+          const body = (r.body || '').trim();
+          if (/^\d{1,3}\./.test(body)) ipVal = body.split('\n')[0].trim();
+        }
+        resEl.textContent = ipVal ? ipVal : ('ok — body len ' + (r.body ? r.body.length : 0));
+        hdrEl.textContent = JSON.stringify(r.headers, null, 2);
+        rawDiag.push(`${prefix} fetch ok, ip: ${ipVal || '(none parsed)'}; headers: ${Object.keys(r.headers).join(', ')}`);
+      }
+
+      showFetchResult('api.ipify.org', ipifyR, 'ipify-res', 'ipify-headers');
+      showFetchResult('ipinfo.io', ipinfoR, 'ipinfo-res', 'ipinfo-headers');
+      showFetchResult('ifconfig.co', ifcR, 'ifc-res', 'ifc-headers');
+      showFetchResult('duckduckgo.com', ddgR, 'ddg-res', 'ddg-headers');
+
+      // Interpretations
+      const ipifyVal = (ipifyR && !ipifyR.error && ipifyR.ok) ? (()=>{ try{ const j=JSON.parse(ipifyR.body); return j.ip }catch(e){ return null } })() : null;
+      // gather srflx across STUNs
+      const allSrflx = new Set();
+      const allHost = new Set();
+      for (const s of stunResults) {
+        if (s.res) {
+          for (const x of s.res.srflx) allSrflx.add(x);
+          for (const x of s.res.host) allHost.add(x);
+          for (const x of s.res.other) allHost.add(x);
+        }
+      }
+
+      const srflxArr = Array.from(allSrflx);
+      const hostArr = Array.from(allHost);
+      let httpsMsg = '';
+      if (srflxArr.length && ipifyVal && srflxArr.includes(ipifyVal)) {
+        httpsMsg = `STUN srflx (${srflxArr.join(', ')}) matches HTTPS ipify (${ipifyVal}) — both see same egress IP.`;
+      } else if (srflxArr.length && ipifyVal && !srflxArr.includes(ipifyVal)) {
+        httpsMsg = `STUN srflx (${srflxArr.join(', ')}) differs from HTTPS ipify (${ipifyVal}) — indicates different routing or masking.`;
+      } else if (!srflxArr.length && ipifyVal) {
+        httpsMsg = `No srflx candidates were obtained, but HTTPS reported ${ipifyVal} — likely STUN/UDP blocked or browser masking, while HTTPS is direct or split-tunneled.`;
+      } else if (srflxArr.length && !ipifyVal) {
+        httpsMsg = `STUN reported srflx ${srflxArr.join(', ')} but HTTPS ipify failed or was blocked.`;
+      } else {
+        httpsMsg = 'No conclusive public IP detected via STUN or HTTPS ipify.';
+      }
+      document.getElementById('https-interpret').textContent = httpsMsg;
+
+      // webrtc heuristics
+      let wInterp = '';
+      if (hostArr.some(x => x === 'masked-token' || (typeof x === 'string' && x.startsWith('e:')) || /.+\.local$/i.test(x))) {
+        wInterp += 'Browser is masking/using mDNS or tokenized local candidates.\n';
+      }
+      if (srflxArr.length) wInterp += `srflx seen: ${srflxArr.join(', ')}\n`;
+      if (!srflxArr.length) wInterp += 'no srflx (public) candidates observed — STUN likely blocked, or browser policy hides them.\n';
+      document.getElementById('webrtc-interpret').textContent = wInterp || '(none)';
+
+      document.getElementById('webrtc-status').textContent = 'done';
+      document.getElementById('raw-diagnostics').textContent = rawDiag.join('\n\n');
+    });
+  </script>
+</body>
+</html>

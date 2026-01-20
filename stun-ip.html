@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WebRTC Public IP Detector (STUN PoC)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; }
+    h1 { margin-bottom: 0.5rem; }
+    #status { color: #555; margin-bottom: 1rem; }
+    pre { background: #f4f4f4; padding: 1rem; border-radius: 6px; }
+    .public { color: green; font-weight: 600; }
+    .local { color: gray; }
+    .warn { color: #b06; }
+  </style>
+</head>
+<body>
+  <h1>WebRTC Public IP Detector</h1>
+  <div id="status">Click the button to start...</div>
+  <button id="start">Detect IP</button>
+  <pre id="output"></pre>
+
+  <script>
+    const status = document.getElementById('status');
+    const output = document.getElementById('output');
+    const seen = new Set();
+
+    function log(line, cls = "") {
+      const el = document.createElement('div');
+      el.textContent = line;
+      if (cls) el.className = cls;
+      output.appendChild(el);
+    }
+
+    async function detectPublicIP() {
+      output.textContent = "";
+      seen.clear();
+      status.textContent = "Running STUN discovery...";
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+      });
+
+      // Create dummy data channel to start ICE candidate gathering
+      pc.createDataChannel("dummy");
+
+      pc.onicecandidate = event => {
+        if (!event.candidate) {
+          status.textContent = "Done collecting candidates.";
+          pc.close();
+          return;
+        }
+
+        const c = event.candidate;
+        const candidateStr = c.candidate || "";
+        const typeMatch = candidateStr.match(/typ\s(\w+)/);
+        const type = typeMatch ? typeMatch[1] : "unknown";
+
+        const ipMatch = candidateStr.match(
+          /([0-9]{1,3}(?:\.[0-9]{1,3}){3}|[a-f0-9:]+(?:%[0-9a-z]+)?)/i
+        );
+        const ip = ipMatch ? ipMatch[1] : "";
+
+        if (!ip || seen.has(ip)) return;
+        seen.add(ip);
+
+        if (type === "srflx") {
+          log(`Public (STUN reflexive) IP: ${ip}`, "public");
+        } else if (type === "host") {
+          log(`Local IP candidate: ${ip}`, "local");
+        } else {
+          log(`Other (${type}) candidate: ${ip}`, "warn");
+        }
+      };
+
+      try {
+        const offer = await pc.createOffer({ offerToReceiveAudio: false });
+        await pc.setLocalDescription(offer);
+      } catch (err) {
+        status.textContent = "Error: " + err.message;
+        console.error(err);
+      }
+    }
+
+    document.getElementById("start").addEventListener("click", detectPublicIP);
+  </script>
+</body>
+</html>

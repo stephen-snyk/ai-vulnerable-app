@@ -1,0 +1,9 @@
+---
+description: Always run Snyk Code scanning tool for new first-party code generated.
+globs:
+  - "*.js"
+  - "*.ts"
+  - "*.py"
+  - "src/**/*.java"
+alwaysApply: true
+---

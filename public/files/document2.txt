@@ -1,0 +1,8 @@
+Document 2 - Project Notes
+
+- Complete security review
+- Update dependencies
+- Fix known vulnerabilities
+- Add input validation
+
+Remember: Never trust user input!
