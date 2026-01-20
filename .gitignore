@@ -1,5 +1,6 @@
 !source_instructions.json
 *docs/
+node_modules/
 *.csv
 *.log
 __pycache__/
