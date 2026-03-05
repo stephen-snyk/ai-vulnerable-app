@@ -1,0 +1,6 @@
+{
+    "snyk.advanced.autoSelectOrganization": false,
+    "snyk.scanningMode": "auto",
+    "snyk.enableSnykOpenSource": true,
+    "snyk.features.openSourceSecurity": true
+}
